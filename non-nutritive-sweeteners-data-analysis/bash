@@ -1,0 +1,33 @@
+#!/bin/bash
+
+INPUT=$1 # input file recording the sample's name
+K=$2 # value of k in k-mer counting
+TYPE=$3 # type of the samples, e.g stool, oral
+START=`date +%s`
+NUM_OF_LINES=$(< "$1" wc -l)
+COUNT=0
+
+OUTPUT_FOLDER="/N/slate/andyzhai/mg-data/$TYPE/$K"
+
+if [ ! -d "$OUTPUT_FOLDER" ]; then
+  mkdir -p "$OUTPUT_FOLDER"
+fi
+
+DATA_PATH="/N/slate/jfukuyam/mg-data/reads_fastq/"
+echo "Start k-mer counting" > $OUTPUT_FOLDER/runtime.log
+while IFS= read -r line
+do
+  DIR="$DATA_PATH$line"
+  COUNT=$(($COUNT + 1))
+  if [ -d "$DIR" ]; then
+    OUTPUT="$line"
+    DATA_TYPE=".fastq.gz"
+    ./jellyfish count -o $OUTPUT_FOLDER/$OUTPUT.jf -m $K -s 100M -t 16 -C <(zcat $DIR/$line.fastq.gz)
+    ./jellyfish dump $OUTPUT_FOLDER/$OUTPUT.jf > $OUTPUT_FOLDER/$OUTPUT.txt
+  fi
+  echo "$COUNT of $NUM_OF_LINES samples have been processed." >> $OUTPUT_FOLDER/runtime.log
+done < "$INPUT"
+END=`date +%s`
+RUNTIME=$(($END-$START))
+
+echo $RUNTIME >> $OUTPUT_FOLDER/runtime.log
