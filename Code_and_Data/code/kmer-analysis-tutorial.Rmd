@@ -1,0 +1,210 @@
+---
+title: "k-mer data analysis"
+author: "Hongxuan Zhai"
+date: "9/7/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+In this tutorial, we show how to use the defined functions to analyze the real data set and to generate the plot in the paper. The real data is a gut microbiome data set (Fukuyama et al., 2017) which focuses on the stability, resilience, and response to perturbation of the bacterial communities in the human gut. In this data set, there are 2611 taxa and 419 samples, and each taxon is represented by a sequence of length 233. This tutorial also includes the filtering and pre-processing steps to deal with rare taxa in the samples.
+
+
+
+## Import Libraries
+
+```{r required}
+library(tidyverse)
+library(phyloseq)
+library(adaptiveGPCA)
+library(DistatisR)
+library(ggplot2)
+library(vegan)
+library(ggpubr)
+library(kableExtra)
+library(kernlab)
+library(viridis)
+library(patchwork)
+library(reshape2)
+```
+
+## Load Real Data
+```{r real_data}
+load("../data/phyloseq_objects.RData")
+```
+
+
+## Functions
+
+```{r functions}
+kmerDist <- function(otutab, MMt, D = rep(1, nrow(otutab))) {
+    Qeig = eigen(MMt)
+    X = otutab
+    X = scale(X, scale = FALSE)
+    out.gpca = adaptiveGPCA:::gpcaEvecs(X,
+                                        evecs = Qeig$vectors,
+                                        evals = Qeig$values,
+                                        D = D, k = min(nrow(X), ncol(X)))
+    Uscaled = sweep(out.gpca$U, 2, STATS = out.gpca$lambda, FUN = "*")
+    return(dist(Uscaled, method = "euclidean"))
+}
+
+dpcoaDist <- function(otutab, Q, r = 1, D = rep(1, nrow(otutab))) {
+    Qeig = eigen(Q)
+    X = otutab
+    X = scale(X, scale = FALSE)
+    if(r < 1 && r > 0) {
+        out.gpca = adaptiveGPCA:::gpcaEvecs(X,
+                                            evecs = Qeig$vectors,
+                                            evals = (rep(r^(-1), ncol(X)) + (1-r)^(-1) * Qeig$values^(-1))^(-1),
+                                            D = D, k = min(nrow(X), ncol(X)))
+    } else if(r == 1) {
+        out.gpca = adaptiveGPCA:::gpcaEvecs(X,
+                                            evecs = Qeig$vectors,
+                                            evals = Qeig$values,
+                                            D = D, k = min(nrow(X), ncol(X)))
+    } else if(r == 0){
+        out.gpca = adaptiveGPCA:::gpcaEvecs(X,
+                                            evecs = Qeig$vectors,
+                                            evals = rep(1, ncol(X)),
+                                            D = D, k = min(nrow(X), ncol(X)))
+    }
+    Uscaled = sweep(out.gpca$U, 2, STATS = out.gpca$lambda, FUN = "*")
+    return(dist(Uscaled, method = "euclidean"))
+}
+
+#' Function to filtering out rare RSVs
+#' 
+#' @param phylo_obj a phyloseq object
+#' @param count minimum number of occurance for a RSV used in filtering
+#' @param portion used in filtering
+#' @param psudo_count number to be added when 0 is prsent
+#' 
+#' @return a phyloseq object with pruned phylogeny 
+filter_rare <- function(phylo_obj, count, portion, psudo_cnt = 0) {
+  require(phyloseq)
+  res = phyloseq::filter_taxa(phylo_obj, function(x) sum(x > count) > 
+                                (portion*length(x)), TRUE)
+  if (psudo_cnt) {
+    res = phyloseq::transform_sample_counts(res, function(x) x+psudo_cnt)}
+  return(res)
+}
+
+```
+
+
+## Data Analysis
+
+
+We filter out taxa that were not seen with more than 3 counts in at least 20% of our samples.
+Compute the k-mer distances and DPCoA distances on the log-transformed data:
+```{r}
+pruned_phylo = filter_rare(cc, 3, 0.2)
+pruned_phylo_log = pruned_phylo
+otu_table(pruned_phylo_log) = log(1 + otu_table(pruned_phylo))
+pp = processPhyloseq(pruned_phylo_log)
+k_vals = c(1:10, 20, 30, 40, 50, 75)
+MMt_list = lapply(k_vals, function(k) {
+    sk = stringdot(type = "spectrum", length = k, normalized = FALSE)
+    kernel_matrix = kernelMatrix(sk, taxa_names(pruned_phylo))
+})
+r_vals = c(0, .01, .1, .5, .9, .95, .99, .999, 1)
+dpcoa_distances = lapply(r_vals, function(r) dpcoaDist(pp$X, pp$Q, r = r))
+kmer_distances = lapply(MMt_list, function(MMt) kmerDist(pp$X, MMt))
+```
+
+
+
+Perform distatis on the distances to see the relationships among them:
+```{r}
+distance_list = c(dpcoa_distances, kmer_distances)
+distance_types = rbind(
+    data.frame(family = "DPCoA", param = r_vals),
+    data.frame(family = "kmer", param = k_vals)
+)
+distance_array = array(dim = c(nsamples(pruned_phylo), nsamples(pruned_phylo), length(distance_list)))
+for(i in 1:length(distance_list)) {
+    distance_array[,,i] = as.matrix(distance_list[[i]])
+}
+out_distatis = distatis(distance_array)
+```
+
+Look at the relationships between the DPCoA distances and the k-mer distances:
+```{r}
+labs = sprintf("Axis %i: %4.2f%%", 1:length(distance_list),
+    out_distatis$res4Cmat$eigValues / sum(out_distatis$res4Cmat$eigValues) * 100)
+plotting = data.frame(distance_types, sweep(scale(out_distatis$res4Cmat$eigVector, center = TRUE), MARGIN = 2, STAT = sqrt(out_distatis$res4Cmat$eigValues), FUN = "*"))
+pdf("dpcoa-kmer-distatis.pdf", width = 6, height = 4.5)
+ggplot() +
+    geom_point(aes(x = dim.1, y = dim.2, color = param, shape = 16),
+               data = subset(plotting, family == "DPCoA"), size = 3) +
+    geom_point(aes(x = dim.1, y = dim.2, fill = log2(param), shape = 22),
+               data = subset(plotting, family == "kmer"),
+               color = rgb(0,0,0,0), size = 3) + 
+    xlab(labs[1]) +  ylab(labs[2]) +
+    scale_fill_viridis("log2(k)", option = "F", direction = -1) +
+    scale_color_viridis("r", option = "G") +
+    scale_shape_identity("Family", breaks = c(16, 22), labels = c("DPCoA", "kmer"), guide = "legend")
+dev.off()
+```
+
+
+Look at the RV coefficient matrix:
+```{r}
+rv_mat = out_distatis$res4Cmat$C
+pca_idx = which(distance_types$family == "DPCoA" & distance_types$param == 0)
+names = apply(distance_types, 1, function(fp) {
+    family = fp[1]
+    param = as.numeric(fp[2])
+    if(family == "DPCoA") {
+        return(sprintf("%s %.2f", family, param))
+    } else {
+        return(sprintf("%s %2i", family, param))
+    }
+})
+names[pca_idx] = "Euclidean"
+rownames(rv_mat) = colnames(rv_mat) = names
+n_r = length(r_vals)
+n_k = length(k_vals)
+dpcoa_kmer_rv = melt(rv_mat[1:n_r, (n_r+1):(n_r+n_k)], varnames = c("dpcoa", "kmer"))
+closest_matches = dpcoa_kmer_rv %>% group_by(kmer) %>% summarise(max_dpcoa = dpcoa[which.max(value)])
+pdf("dpcoa-kmer-rv.pdf", width = 7, height = 4)
+ggplot(dpcoa_kmer_rv) +
+    geom_tile(aes(x = dpcoa, y = kmer, fill = value)) +
+    geom_tile(aes(x = max_dpcoa, y = kmer), fill = rgb(0,0,0,0), size = .5, color = "black", data = closest_matches) +
+    scale_fill_viridis("RV coef") + theme(axis.text.x = element_text(angle = 90, vjust = .5)) + xlab("") + ylab("") + coord_flip()
+dev.off()
+```
+
+Look at the embeddings in the first two dimensions for a subset of the distances:
+```{r}
+embedding_list = lapply(distance_list, cmdscale)
+plots = lapply(embedding_list, function(x) {
+    colnames(x) = paste0("Axis", 1:ncol(x))
+    p = ggplot(data.frame(x, sample_data(cc))) +
+        geom_point(aes(x = Axis1, y = Axis2, color = Subject, shape = PreImmpostPost)) +
+        scale_shape("Time") +
+        theme(
+              axis.ticks.x = element_blank(), axis.text.x = element_blank(),
+              axis.ticks.y = element_blank(), axis.text.y = element_blank(),
+              axis.title.x = element_text(size = 12),
+              axis.title.y = element_text(size = 12))
+    return(p)
+})
+
+
+plots = mapply(FUN = function(p, name) p + ggtitle(name), plots, rownames(rv_mat), SIMPLIFY = FALSE)
+to_plot = c(9, 6, 5, 4, 1, 10, 11, 12, 13, 14, 17, 19, 21, 23, 24)
+pdf("dpcoa-kmer-embedding.pdf", width = 8, height = 5)
+wrap_plots(plots[to_plot], ncol = 5) + plot_layout(guides = "collect")
+dev.off()
+```
+
+```{r}
+for_table = c(1, 4, 5, 6, 9, 10, 11, 12, 13, 14, 17, 19, 21, 23, 24)
+kbl(round(rv_mat[for_table, for_table], digits = 2), booktabs = TRUE, format = "latex")
+```
