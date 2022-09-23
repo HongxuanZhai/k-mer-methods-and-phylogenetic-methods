@@ -192,7 +192,9 @@ library(kableExtra)
 library(kernlab)
 library(reshape2)
 library(viridis)
-library(patchwork)</code></pre>
+library(patchwork)
+library(treeDA)
+library(treeio)</code></pre>
 </div>
 <div id="load-real-data" class="section level2">
 <h2>Load Real Data</h2>
@@ -255,6 +257,91 @@ filter_rare &lt;- function(phylo_obj, count, portion, psudo_cnt = 0) {
 </div>
 <div id="data-analysis" class="section level2">
 <h2>Data Analysis</h2>
+<div id="simulation-data-analysis" class="section level3">
+<h3>Simulation Data Analysis</h3>
+<p>In this section, we use the simulated results to make plots for the eigenstructure of different tree. We first load three different tree types discussed in the paper (complete balanced binary tree, comb tree, real tree from the gut microbiome study (Fukuyama et al., 2017)).</p>
+<pre class="r"><code>bt &lt;- treeio::read.beast.newick(&quot;../data/btree.tree&quot;) # binary tree
+ct &lt;- treeio::read.beast.newick(&quot;../data/ctree.tree&quot;) # comb tree
+rt &lt;- treeio::read.beast.newick(&quot;../data/real_tree.xml&quot;) # real tree</code></pre>
+<p>Next, we read in the simulated eigenvalues and eigenvectors using different pholygenetic tree structure. The columns indicate eigenvalues/eigenvectors under different k in k-mer.</p>
+<pre class="r"><code>b_eigvals &lt;- read.csv(&quot;../data/b_eigvals_10000.csv&quot;, header = TRUE) # eigenvalues for binary tree
+c_eigvals &lt;- read.csv(&quot;../data/c_eigvals_10000.csv&quot;, header = TRUE) # eigenvalues for comb tree
+r_eigvals &lt;- read.csv(&quot;../data/r_eigvals_10000.csv&quot;, header = TRUE) # eigenvalues for real tree</code></pre>
+<p>Then we plot the relative weights for each eigenvalues, where the weights for eigenvalue <span class="math inline">\(\lambda_i\)</span> is defined as <span class="math display">\[\frac{\lambda_i}{\sum_{m=0}^p\lambda_m}\]</span></p>
+<pre class="r"><code>b_eigvals  = as.data.frame(lapply(b_eigvals, function(x) x/sum(x)))
+c_eigvals  = as.data.frame(lapply(c_eigvals, function(x) x/sum(x))) 
+r_eigvals  = as.data.frame(lapply(r_eigvals, function(x) x/sum(x))) 
+colnames(b_eigvals) &lt;- c(&#39;k=1&#39;, &#39;k=2&#39;, &#39;k=3&#39;, &#39;k=4&#39;, &#39;k=5&#39;, &#39;k=6&#39;, &#39;k=7&#39;)
+colnames(c_eigvals) &lt;- c(&#39;k=1&#39;, &#39;k=2&#39;, &#39;k=3&#39;, &#39;k=4&#39;, &#39;k=5&#39;, &#39;k=6&#39;, &#39;k=7&#39;)
+colnames(r_eigvals) &lt;- c(&#39;k=1&#39;, &#39;k=2&#39;, &#39;k=3&#39;, &#39;k=4&#39;, &#39;k=5&#39;, &#39;k=6&#39;, &#39;k=7&#39;)
+b_eigvals = b_eigvals %&gt;% 
+  rownames_to_column(&quot;index&quot;) %&gt;%
+  gather(k, values, -index)
+c_eigvals = c_eigvals %&gt;% 
+  rownames_to_column(&quot;index&quot;) %&gt;%
+  gather(k, values, -index)
+r_eigvals = r_eigvals %&gt;% 
+  rownames_to_column(&quot;index&quot;) %&gt;%
+  gather(k, values, -index)
+b_eigvals$tree = rep(&#39;binary&#39;, 224)
+c_eigvals$tree = rep(&#39;comb&#39;, 224)
+r_eigvals$tree = rep(&#39;real&#39;, 350)
+b_eigvals$index &lt;- as.numeric(b_eigvals$index)
+c_eigvals$index &lt;- as.numeric(c_eigvals$index)
+r_eigvals$index &lt;- as.numeric(r_eigvals$index)
+
+bp1 &lt;- ggplot(b_eigvals, aes(index, values, group = k)) + geom_path(aes(color = k)) +
+  geom_point(aes(color = k)) + theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = &quot;black&quot;)) +
+  xlab(&quot;order&quot;) + ylab(&quot;value&quot;) + ggtitle(&quot;binary tree&quot;)
+
+bp2 &lt;- ggplot(b_eigvals, aes(index, values, group = k)) + geom_path(aes(color = k)) +
+  geom_point(aes(color = k)) + coord_cartesian(xlim = c(2, 9), ylim = c(0, 40)) + theme_bw() +
+  theme(legend.position = &quot;none&quot;, panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = &quot;black&quot;)) + xlab(&quot;&quot;) + ylab(&quot;&quot;)
+
+bp_zoom = ggplotGrob(bp2)
+bp = bp1 + annotation_custom(grob = bp_zoom, xmin = 10, xmax = 32, ymin = 20, ymax = 360)
+
+cp1 &lt;- ggplot(c_eigvals, aes(index, values, group = k)) + geom_path(aes(color = k)) +
+  geom_point(aes(color = k)) + theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = &quot;black&quot;))+
+  xlab(&quot;order&quot;) + ylab(&quot;value&quot;) + ggtitle(&quot;comb tree&quot;)
+
+cp2 &lt;- ggplot(c_eigvals, aes(index, values, group = k)) + geom_path(aes(color = k)) +
+  geom_point(aes(color = k)) + coord_cartesian(xlim = c(2, 9), ylim = c(0,30)) + theme_bw() +
+  theme(legend.position = &quot;none&quot;, panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = &quot;black&quot;)) + xlab(&quot;&quot;) + ylab(&quot;&quot;)
+
+cp_zoom = ggplotGrob(cp2)
+cp = cp1 + annotation_custom(grob = cp_zoom, xmin = 7, xmax = 32, ymin = 20, ymax = 350)
+
+rp1 &lt;- ggplot(r_eigvals, aes(index, values, group = k)) + geom_path(aes(color = k)) +
+  geom_point(aes(color = k)) + theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = &quot;black&quot;))+
+  xlab(&quot;order&quot;) + ylab(&quot;value&quot;) + ggtitle(&quot;real tree&quot;)
+
+rp2 &lt;- ggplot(r_eigvals, aes(index, values, group = k)) + geom_path(aes(color = k)) +
+  geom_point(aes(color = k)) + coord_cartesian(xlim = c(2, 9), ylim = c(0, 30)) + theme_bw() +
+  theme(legend.position = &quot;none&quot;, panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = &quot;black&quot;)) + xlab(&quot;&quot;) + ylab(&quot;&quot;)
+
+rp_zoom = ggplotGrob(rp2)
+rp = rp1 + annotation_custom(grob = rp_zoom, xmin = 7, xmax = 48, ymin = 50, ymax = 700)
+
+p_eig &lt;- ggarrange(bp, cp, rp,
+                   ncol = 3, nrow = 1, common.legend = TRUE, legend = &#39;bottom&#39;)
+pdf(&quot;eigenvals_ratio.pdf&quot;, width = 6, height = 4.5)
+p_eig
+dev.off()</code></pre>
+<pre><code>## quartz_off_screen 
+##                 2</code></pre>
+</div>
+<div id="real-data-analysis" class="section level3">
+<h3>Real Data Analysis</h3>
 <p>We filter out taxa that were not seen with more than 3 counts in at least 20% of our samples. Compute the k-mer distances and DPCoA distances on the log-transformed data:</p>
 <pre class="r"><code>pruned_phylo = filter_rare(cc, 3, 0.2)
 pruned_phylo_log = pruned_phylo
@@ -347,6 +434,7 @@ dev.off()</code></pre>
 ##                 2</code></pre>
 <pre class="r"><code>for_table = c(1, 4, 5, 6, 9, 10, 11, 12, 13, 14, 17, 19, 21, 23, 24)
 kbl(round(rv_mat[for_table, for_table], digits = 2), booktabs = TRUE, format = &quot;latex&quot;)</code></pre>
+</div>
 </div>
 <div id="repeat-with-a-different-transformation-clr" class="section level2">
 <h2>Repeat with a different transformation (clr)</h2>
