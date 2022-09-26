@@ -22,6 +22,7 @@ library(tidyverse)
 library(phyloseq)
 library(adaptiveGPCA)
 library(DistatisR)
+library(dplyr)
 library(ggplot2)
 library(vegan)
 library(ggpubr)
@@ -43,7 +44,7 @@ load("../data/phyloseq_objects.RData")
 ## Functions
 
 ```{r functions}
-kmerDist <- function(otutab, MMt, D = rep(1, nrow(otutab))) {
+eksDist <- function(otutab, MMt, D = rep(1, nrow(otutab))) {
     Qeig = eigen(MMt)
     X = otutab
     X = scale(X, scale = FALSE)
@@ -55,7 +56,7 @@ kmerDist <- function(otutab, MMt, D = rep(1, nrow(otutab))) {
     return(dist(Uscaled, method = "euclidean"))
 }
 
-dpcoaDist <- function(otutab, Q, r = 1, D = rep(1, nrow(otutab))) {
+mpqDist <- function(otutab, Q, r = 1, D = rep(1, nrow(otutab))) {
     Qeig = eigen(Q)
     X = otutab
     X = scale(X, scale = FALSE)
@@ -98,10 +99,7 @@ filter_rare <- function(phylo_obj, count, portion, psudo_cnt = 0) {
 
 ```
 
-
-## Data Analysis
-
-### Simulation Data Analysis
+## Simulation Data Analysis
 
 In this section, we use the simulated results to make plots for the eigenstructure of 
 different tree. We first load three different tree types discussed in the paper (complete balanced binary tree, comb tree, real tree from the gut microbiome study (Fukuyama et al., 2017)).
@@ -189,10 +187,10 @@ p_eig <- ggarrange(bp, cp, rp,
                    ncol = 3, nrow = 1, common.legend = TRUE, legend = 'bottom')
 ```
 
-### Real Data Analysis
+## Real Data Analysis
 
 We filter out taxa that were not seen with more than 3 counts in at least 20% of our samples.
-Compute the k-mer distances and DPCoA distances on the log-transformed data:
+Compute the k-mer distances and MPQ distances on the log-transformed data:
 ```{r}
 pruned_phylo = filter_rare(cc, 3, 0.2)
 pruned_phylo_log = pruned_phylo
@@ -204,18 +202,18 @@ MMt_list = lapply(k_vals, function(k) {
     kernel_matrix = kernelMatrix(sk, taxa_names(pruned_phylo))
 })
 r_vals = c(0, .01, .1, .5, .9, .95, .99, .999, 1)
-dpcoa_distances = lapply(r_vals, function(r) dpcoaDist(pp$X, pp$Q, r = r))
-kmer_distances = lapply(MMt_list, function(MMt) kmerDist(pp$X, MMt))
+mpq_distances = lapply(r_vals, function(r) mpqDist(pp$X, pp$Q, r = r))
+eks_distances = lapply(MMt_list, function(MMt) eksDist(pp$X, MMt))
 ```
 
 
 
 Perform distatis on the distances to see the relationships among them:
 ```{r}
-distance_list = c(dpcoa_distances, kmer_distances)
+distance_list = c(mpq_distances, eks_distances)
 distance_types = rbind(
-    data.frame(family = "DPCoA", param = r_vals),
-    data.frame(family = "kmer", param = k_vals)
+    data.frame(family = "MPQ", param = r_vals),
+    data.frame(family = "EKS", param = k_vals)
 )
 distance_array = array(dim = c(nsamples(pruned_phylo), nsamples(pruned_phylo), length(distance_list)))
 for(i in 1:length(distance_list)) {
@@ -224,23 +222,23 @@ for(i in 1:length(distance_list)) {
 out_distatis = distatis(distance_array)
 ```
 
-Look at the relationships between the DPCoA distances and the k-mer distances:
+Look at the relationships between the MPQ distances and the k-mer distances:
 ```{r}
 labs = sprintf("Axis %i: %4.2f%%", 1:length(distance_list),
     out_distatis$res4Cmat$eigValues / sum(out_distatis$res4Cmat$eigValues) * 100)
 plotting = data.frame(distance_types, sweep(scale(out_distatis$res4Cmat$eigVector, center = TRUE), MARGIN = 2, STAT = sqrt(out_distatis$res4Cmat$eigValues), FUN = "*"))
-pdf("dpcoa-kmer-distatis.pdf", width = 6, height = 4.5)
+pdf("mpq-eks-distatis.pdf", width = 6, height = 4.5)
 ggplot() +
     geom_point(aes(x = dim.1, y = dim.2, color = param, shape = 16),
-               data = subset(plotting, family == "kmer"), size = 3) + 
+               data = subset(plotting, family == "EKS"), size = 3) + 
     geom_point(aes(x = dim.1, y = dim.2, fill = param, shape = 22),
-               data = subset(plotting, family == "DPCoA"), size = 3) +
+               data = subset(plotting, family == "MPQ"), size = 3) +
     xlab(labs[1]) +  ylab(labs[2]) +
     scale_fill_gradientn("r", colours=viridis(n = 100, begin = .6, end = .35, option = "F")) +
     scale_color_gradientn("k",
                           colours=viridis(n = length(k_vals), begin = .35, end = .6, option = "G"),
                           breaks = k_vals[seq(1, length(k_vals), by=2)], trans = "log2") +
-    scale_shape_identity("Family", breaks = c(22, 16), labels = c("DPCoA", "kmer"), guide = "legend")
+    scale_shape_identity("Family", breaks = c(22, 16), labels = c("MPQ", "EKS"), guide = "legend")
 dev.off()
 ```
 
@@ -248,11 +246,11 @@ dev.off()
 Look at the RV coefficient matrix:
 ```{r}
 rv_mat = out_distatis$res4Cmat$C
-pca_idx = which(distance_types$family == "DPCoA" & distance_types$param == 0)
+pca_idx = which(distance_types$family == "MPQ" & distance_types$param == 0)
 names = apply(distance_types, 1, function(fp) {
     family = fp[1]
     param = as.numeric(fp[2])
-    if(family == "DPCoA") {
+    if(family == "MPQ") {
         return(sprintf("%s %.2f", family, param))
     } else {
         return(sprintf("%s %2i", family, param))
@@ -262,12 +260,12 @@ names = apply(distance_types, 1, function(fp) {
 rownames(rv_mat) = colnames(rv_mat) = names
 n_r = length(r_vals)
 n_k = length(k_vals)
-dpcoa_kmer_rv = melt(rv_mat[1:n_r, (n_r+1):(n_r+n_k)], varnames = c("dpcoa", "kmer"))
-closest_matches = dpcoa_kmer_rv %>% group_by(kmer) %>% summarise(max_dpcoa = dpcoa[which.max(value)])
-pdf("dpcoa-kmer-rv.pdf", width = 7, height = 4)
-ggplot(dpcoa_kmer_rv) +
-    geom_tile(aes(x = dpcoa, y = kmer, fill = value)) +
-    geom_tile(aes(x = max_dpcoa, y = kmer), fill = rgb(0,0,0,0), size = .5, color = "black", data = closest_matches) +
+mpq_eks_rv = melt(rv_mat[1:n_r, (n_r+1):(n_r+n_k)], varnames = c("MPQ", "EKS"))
+closest_matches = mpq_eks_rv %>% group_by(EKS) %>% summarise(max_mpq = MPQ[which.max(value)])
+pdf("mpq-eks-rv.pdf", width = 7, height = 4)
+ggplot(mpq_eks_rv) +
+    geom_tile(aes(x = MPQ, y = EKS, fill = value)) +
+    geom_tile(aes(x = max_mpq, y = EKS), fill = rgb(0,0,0,0), size = .5, color = "black", data = closest_matches) +
     scale_fill_viridis("RV coef") + theme(axis.text.x = element_text(angle = 90, vjust = .5)) + xlab("") + ylab("") + coord_flip()
 dev.off()
 ```
@@ -289,7 +287,7 @@ plots = lapply(embedding_list, function(x) {
 })
 plots = mapply(FUN = function(p, name) p + ggtitle(name), plots, rownames(rv_mat), SIMPLIFY = FALSE)
 to_plot = c(9, 6, 5, 4, 1, 10, 11, 12, 13, 14, 17, 19, 21, 23, 24)
-pdf("dpcoa-kmer-embedding.pdf", width = 8, height = 5)
+pdf("mpq-eks-embedding.pdf", width = 8, height = 5)
 wrap_plots(plots[to_plot], ncol = 5) + plot_layout(guides = "collect")
 dev.off()
 ```
@@ -315,15 +313,15 @@ MMt_list = lapply(k_vals, function(k) {
     kernel_matrix = kernelMatrix(sk, taxa_names(pruned_phylo))
 })
 r_vals = c(0, .01, .1, .5, .9, .95, .99, .999, 1)
-dpcoa_distances = lapply(r_vals, function(r) dpcoaDist(pp$X, pp$Q, r = r))
-kmer_distances = lapply(MMt_list, function(MMt) kmerDist(pp$X, MMt))
+mpq_distances = lapply(r_vals, function(r) mpqDist(pp$X, pp$Q, r = r))
+eks_distances = lapply(MMt_list, function(MMt) eksDist(pp$X, MMt))
 ```
 
 ```{r}
-distance_list = c(dpcoa_distances, kmer_distances)
+distance_list = c(mpq_distances, eks_distances)
 distance_types = rbind(
-    data.frame(family = "DPCoA", param = r_vals),
-    data.frame(family = "kmer", param = k_vals)
+    data.frame(family = "MPQ", param = r_vals),
+    data.frame(family = "EKS", param = k_vals)
 )
 distance_array = array(dim = c(nsamples(pruned_phylo), nsamples(pruned_phylo), length(distance_list)))
 for(i in 1:length(distance_list)) {
@@ -334,26 +332,26 @@ out_distatis = distatis(distance_array)
 labs = sprintf("Axis %i: %4.3f%%", 1:length(distance_list),
     out_distatis$res4Cmat$eigValues / sum(out_distatis$res4Cmat$eigValues) * 100)
 plotting = data.frame(distance_types, sweep(scale(out_distatis$res4Cmat$eigVector, center = TRUE), MARGIN = 2, STAT = sqrt(out_distatis$res4Cmat$eigValues), FUN = "*"))
-pdf("dpcoa-kmer-distatis-clr.pdf", width = 6, height = 4.5)
+pdf("mpq-eks-distatis-clr.pdf", width = 6, height = 4.5)
 ggplot() +
     geom_point(aes(x = dim.1, y = dim.2, color = param, shape = 16),
-               data = subset(plotting, family == "kmer"), size = 3) + 
+               data = subset(plotting, family == "EKS"), size = 3) + 
     geom_point(aes(x = dim.1, y = dim.2, fill = param, shape = 22),
-               data = subset(plotting, family == "DPCoA"), size = 3) +
+               data = subset(plotting, family == "MPQ"), size = 3) +
     xlab(labs[1]) +  ylab(labs[2]) +
     scale_fill_gradientn("r", colours=viridis(n = 100, begin = .6, end = .35, option = "F")) +
     scale_color_gradientn("k",
                           colours=viridis(n = length(k_vals), begin = .35, end = .6, option = "G"),
                           breaks = k_vals[seq(1, length(k_vals), by=2)], trans = "log2") +
-    scale_shape_identity("Family", breaks = c(22, 16), labels = c("DPCoA", "kmer"), guide = "legend")
+    scale_shape_identity("Family", breaks = c(22, 16), labels = c("MPQ", "EKS"), guide = "legend")
 dev.off()
 
 rv_mat = out_distatis$res4Cmat$C
-pca_idx = which(distance_types$family == "DPCoA" & distance_types$param == 0)
+pca_idx = which(distance_types$family == "MPQ" & distance_types$param == 0)
 names = apply(distance_types, 1, function(fp) {
     family = fp[1]
     param = as.numeric(fp[2])
-    if(family == "DPCoA") {
+    if(family == "MPQ") {
         return(sprintf("%s %.3f", family, param))
     } else {
         return(sprintf("%s %2i", family, param))
@@ -363,12 +361,12 @@ names = apply(distance_types, 1, function(fp) {
 rownames(rv_mat) = colnames(rv_mat) = names
 n_r = length(r_vals)
 n_k = length(k_vals)
-dpcoa_kmer_rv = melt(rv_mat[1:n_r, (n_r+1):(n_r+n_k)], varnames = c("dpcoa", "kmer"))
-closest_matches = dpcoa_kmer_rv %>% group_by(kmer) %>% summarise(max_dpcoa = dpcoa[which.max(value)])
-pdf("dpcoa-kmer-rv-clr.pdf", width = 7, height = 4)
-ggplot(dpcoa_kmer_rv) +
-    geom_tile(aes(x = dpcoa, y = kmer, fill = value)) +
-    geom_tile(aes(x = max_dpcoa, y = kmer), fill = rgb(0,0,0,0), size = .5, color = "black", data = closest_matches) +
+mpq_eks_rv = melt(rv_mat[1:n_r, (n_r+1):(n_r+n_k)], varnames = c("MPQ", "EKS"))
+closest_matches = mpq_eks_rv %>% group_by(EKS) %>% summarise(max_mpq = MPQ[which.max(value)])
+pdf("mpq-eks-rv-clr.pdf", width = 7, height = 4)
+ggplot(mpq_eks_rv) +
+    geom_tile(aes(x = MPQ, y = EKS, fill = value)) +
+    geom_tile(aes(x = max_mpq, y = EKS), fill = rgb(0,0,0,0), size = .5, color = "black", data = closest_matches) +
     scale_fill_viridis("RV coef") + theme(axis.text.x = element_text(angle = 90, vjust = .5)) + xlab("") + ylab("") + coord_flip()
 dev.off()
 
@@ -390,7 +388,7 @@ plots = lapply(embedding_list, function(x) {
 plots = mapply(FUN = function(p, name) p + ggtitle(name), plots, rownames(rv_mat), SIMPLIFY = FALSE)
 to_plot = c(9, 6, 5, 4, 1,
             10, 11, 12, 17, 18, 19, 20, 21, 22, 23)
-pdf("dpcoa-kmer-embedding-clr.pdf", width = 8, height = 5)
+pdf("mpq-eks-embedding-clr.pdf", width = 8, height = 5)
 wrap_plots(plots[to_plot], ncol = 5) + plot_layout(guides = "collect")
 dev.off()
 
